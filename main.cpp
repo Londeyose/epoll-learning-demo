@@ -72,10 +72,11 @@ int main() {
             } else {
                 while (true) {
                     char buf[1024];
+                    memset(buf, 0, sizeof(buf));
                     int len = read(fd, buf, sizeof(buf) - 1);
                     if (len > 0) {
                         buf[len] = 0;
-                        write(fd, buf, sizeof(buf));
+                        write(fd, buf, len);
                         std::cout << "from fd = " << fd << " : " << buf << std::endl;
                     } else if (len == 0) {
                         std::cout << "client fd = " << fd << " close connection" << std::endl;
