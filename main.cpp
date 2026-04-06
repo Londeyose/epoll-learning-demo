@@ -7,6 +7,7 @@
 
 #include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <iostream>
 
 #define MAX_EVENTS 1024
@@ -15,6 +16,9 @@ int setNonBlock(int fd) { return fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBL
 
 int main() {
     int serv_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    int opt = 1;
+    setsockopt(serv_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -47,24 +51,46 @@ int main() {
             int fd = events[i].data.fd;
 
             if (fd == serv_fd) {
-                int client_fd = accept(serv_fd, nullptr, nullptr);
+                while (true) {
+                    int client_fd = accept(serv_fd, nullptr, nullptr);
 
-                std::cout << "new connection! fd = " << client_fd << std::endl;
-                setNonBlock(client_fd);
-                epoll_event ev{};
-                ev.data.fd = client_fd;
-                ev.events = EPOLLIN;
-                epoll_ctl(epfd, EPOLL_CTL_ADD, client_fd, &ev);
+                    if (-1 == client_fd) {
+                        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                            break;
+                        }
+                        perror("fail to accept!");
+                    }
+
+                    std::cout << "new connection! fd = " << client_fd << std::endl;
+                    setNonBlock(client_fd);
+                    epoll_event ev{};
+                    ev.data.fd = client_fd;
+                    ev.events = EPOLLIN | EPOLLET;  // use et mode
+                    epoll_ctl(epfd, EPOLL_CTL_ADD, client_fd, &ev);
+                }
+
             } else {
-                char buf[124];
-                int len = read(fd, buf, sizeof(buf) - 1);
-                if (len > 0) {
-                    buf[len] = 0;
-                    std::cout << "from fd = " << fd << " : " << buf << std::endl;
-                } else if (len == 0) {
-                    std::cout << "client fd = " << fd << " close connection" << std::endl;
-                    close(fd);
-                    break;
+                while (true) {
+                    char buf[1024];
+                    int len = read(fd, buf, sizeof(buf) - 1);
+                    if (len > 0) {
+                        buf[len] = 0;
+                        write(fd, buf, sizeof(buf));
+                        std::cout << "from fd = " << fd << " : " << buf << std::endl;
+                    } else if (len == 0) {
+                        std::cout << "client fd = " << fd << " close connection" << std::endl;
+                        close(fd);
+                        break;
+                    } else {
+                        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                            // no more read data
+                            std::cout << "all data has beed readed" << std::endl;
+                            break;
+                        }
+                        perror("fail to read");
+                        close(fd);
+                        break;
+                    }
                 }
             }
         }
