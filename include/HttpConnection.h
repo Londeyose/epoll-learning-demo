@@ -1,7 +1,10 @@
 #pragma once
 
+#include <sys/uio.h>
 #include <cstddef>
 #include <string>
+
+using std::string;
 
 enum class HttpParseResult { OK, INVALID_METHOD, INVALID_VERSION, INVALID_REQUEST };
 
@@ -30,30 +33,32 @@ public:
 
     int getfd();
 
-    std::string get_method();
-    std::string get_url();
-    std::string get_version();
+    string get_method();
+    string get_url();
+    string get_version();
 
     void reset();
 
-    static const char* get_content_type(const std::string& url);
+    static const char* get_content_type(const string& url);
 
 private:
     int fd_;
-    char read_buf_[READ_BUFFER_SIZE];
     int read_idx_;
-    char write_buf_[WRITE_BUFFER_SIZE];
     int write_idx_;
-    std::string method_;
-    std::string url_;
-    std::string version_;
+    char read_buf_[READ_BUFFER_SIZE];
+    char write_buf_[WRITE_BUFFER_SIZE];
+
+    string method_;
+    string url_;
+    string version_;
     void* file_addr_ = nullptr;
     size_t file_size_ = 0;
     size_t head_sent_ = 0;
     size_t file_sent_ = 0;
+
     HttpParseResult parse_request_line(char* text);
     bool add_response(const char* format, ...);
-
     void build_ok_response(int code, size_t file_size);
     void build_error_response(int code, const char* reason);
+    void adjust_iov(struct iovec* iov, int iovcnt, int sent);
 };
