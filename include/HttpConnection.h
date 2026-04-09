@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 
 enum class HttpParseResult { OK, INVALID_METHOD, INVALID_VERSION, INVALID_REQUEST };
@@ -35,6 +36,8 @@ public:
 
     void reset();
 
+    static const char* get_content_type(const std::string& url);
+
 private:
     int fd_;
     char read_buf_[READ_BUFFER_SIZE];
@@ -44,6 +47,13 @@ private:
     std::string method_;
     std::string url_;
     std::string version_;
+    void* file_addr_ = nullptr;
+    size_t file_size_ = 0;
+    size_t head_sent_ = 0;
+    size_t file_sent_ = 0;
     HttpParseResult parse_request_line(char* text);
     bool add_response(const char* format, ...);
+
+    void build_ok_response(int code, size_t file_size);
+    void build_error_response(int code, const char* reason);
 };

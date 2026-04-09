@@ -1,11 +1,15 @@
 #include "HttpConnection.h"
 
+#include <fcntl.h>
 #include <stdarg.h>
 #include <strings.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <cerrno>
 #include <cstdarg>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -38,11 +42,10 @@ HttpReadResult HttpConnection::read() {
 }
 
 HttpWriteResult HttpConnection::write() {
-    int bytes_have_send = 0;
-    int byte_to_send = write_idx_;
+    // 第一阶段 发送响应头
 
-    while (byte_to_send > 0) {
-        int len = ::write(fd_, write_buf_ + bytes_have_send, byte_to_send);
+    while (head_sent_ < write_idx_) {
+        int len = ::write(fd_, write_buf_ + head_sent_, write_idx_ - head_sent_);
 
         if (len == -1) {
             // 发送缓冲区满了，等下次 epoll 触发 EPOLLOUT 再发
@@ -53,34 +56,64 @@ HttpWriteResult HttpConnection::write() {
             return HttpWriteResult::ERROR;
         }
 
-        bytes_have_send += len;
-        byte_to_send -= len;
+        head_sent_ += len;
     }
+
     write_idx_ = 0;
+    std::cout << "write called: head_sent_=" << head_sent_ << " write_idx_=" << write_idx_
+              << " file_sent_=" << file_sent_ << " file_size_=" << file_size_
+              << " file_addr_=" << file_addr_ << std::endl;
+    while (file_sent_ < file_size_) {
+        int len = ::write(fd_, (char*)file_addr_ + file_sent_, file_size_ - file_sent_);
+        if (len == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return HttpWriteResult::AGAIN;
+            if (errno == EINTR) continue;
+            return HttpWriteResult::ERROR;
+        }
+        file_sent_ += len;
+    }
+    reset();
     return HttpWriteResult::DONE;
 }
 
 bool HttpConnection::process() {
-    // if (strstr(read_buf_, "\r\n\r\n") == nullptr) {
-    //     std::cout << "read_buf_ end error!" << std::endl;
-    //     return false;
-    // }
-
     if (parse_request_line(read_buf_) != HttpParseResult::OK) {
         std::cout << "parse eror!" << std::endl;
         return false;
     }
 
-    std::string body = "<html><body><h1>Hello from C++ Server!</h1></body></html>";
-    // 开始构建响应
-    add_response("%s %d %s\r\n", "HTTP/1.1", 200, "OK");
-    add_response("Content-Type: %s\r\n", "text/html");
-    add_response("Connection: %s\r\n", "close");
-    add_response("Content-Length: %d\r\n", body.size());
-    add_response("\r\n");  // 关键的空行
-    add_response("%s", body.c_str());
-
     read_idx_ = 0;
+
+    std::string file_path = "resources" + url_;
+
+    std::cout << "file:" << file_path << std::endl;
+
+    struct stat file_stat;
+    if (stat(file_path.c_str(), &file_stat) == -1) {
+        std::cout << 404 << std::endl;
+        build_error_response(404, "Not Found");
+        return true;
+    }
+
+    if (!S_ISREG(file_stat.st_mode) || !(file_stat.st_mode & S_IROTH)) {
+        std::cout << 403 << std::endl;
+        build_error_response(403, "Forbidden");
+        return true;
+    }
+
+    int file_fd = open(file_path.c_str(), O_RDONLY);
+    file_addr_ = mmap(nullptr, file_stat.st_size, PROT_READ, MAP_PRIVATE, file_fd, 0);
+
+    ::close(file_fd);
+
+    if (file_addr_ == MAP_FAILED) {
+        std::cout << 500 << std::endl;
+        build_error_response(500, "Internal Server Error");
+        return true;
+    }
+    file_size_ = file_stat.st_size;
+    std::cout << 200 << std::endl;
+    build_ok_response(200, file_stat.st_size);
 
     return true;
 }
@@ -156,8 +189,14 @@ bool HttpConnection::add_response(const char* format, ...) {
 int HttpConnection::getfd() { return fd_; }
 
 void HttpConnection::reset() {
+    if (file_addr_) {
+        munmap(file_addr_, file_size_);
+        file_addr_ = nullptr;
+    }
     read_idx_ = 0;
     write_idx_ = 0;
+    head_sent_ = 0;
+    file_sent_ = 0;
     method_.clear();
     url_.clear();
     version_.clear();
@@ -168,3 +207,39 @@ std::string HttpConnection::get_method() { return method_; }
 std::string HttpConnection::get_url() { return url_; }
 
 std::string HttpConnection::get_version() { return version_; }
+
+const char* HttpConnection::get_content_type(const std::string& url) {
+    auto ends_with = [](const std::string& str, const std::string& suffix) {
+        if (str.size() < suffix.size()) return false;
+        return str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+    };
+    if (ends_with(url, ".html")) return "text/html";
+    if (ends_with(url, ".css")) return "text/css";
+    if (ends_with(url, ".js")) return "application/javascript";
+    if (ends_with(url, ".png")) return "image/png";
+    if (ends_with(url, ".jpg")) return "image/jpeg";
+    if (ends_with(url, ".ico")) return "image/x-icon";
+
+    return "text/plain";
+}
+
+void HttpConnection::build_ok_response(int code, size_t file_size) {
+    write_idx_ = 0;
+    head_sent_ = 0;
+    // 开始构建响应
+    add_response("%s %d %s\r\n", "HTTP/1.1", code, "OK");
+    add_response("Content-Type: %s\r\n", get_content_type(url_));
+    add_response("Connection: %s\r\n", "close");
+    add_response("Content-Length: %d\r\n", file_size);
+    add_response("\r\n");  // 关键的空行
+}
+
+void HttpConnection::build_error_response(int code, const char* reason) {
+    write_idx_ = 0;
+    head_sent_ = 0;
+    add_response("%s %d %s\r\n", "HTTP/1.1", code, reason);
+    add_response("Content-Type: %s\r\n", get_content_type(url_));
+    add_response("Connection: %s\r\n", "close");
+    add_response("Content-Length: %d\r\n", 0);
+    add_response("\r\n");
+}
