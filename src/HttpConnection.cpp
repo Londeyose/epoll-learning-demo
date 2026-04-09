@@ -5,6 +5,7 @@
 #include <strings.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -22,6 +23,7 @@ HttpReadResult HttpConnection::read() {
     while (true) {
         int remaining = READ_BUFFER_SIZE - read_idx_ - 1;
         if (remaining <= 0) return HttpReadResult::ERROR;  // 缓冲区满了
+        
         int len = ::read(fd_, read_buf_ + read_idx_, remaining);
 
         if (len > 0) {
@@ -41,37 +43,42 @@ HttpReadResult HttpConnection::read() {
     return HttpReadResult::DONE;
 }
 
+void HttpConnection::adjust_iov(struct iovec* iov, int iovcnt, int sent) {
+    for (int i = 0; i < iovcnt; ++i) {
+        if (sent >= (int)iov[i].iov_len) {
+            sent -= iov[i].iov_len;
+            iov[i].iov_len = 0;
+        } else {
+            iov[i].iov_base = (char*)iov[i].iov_base + sent;
+            iov[i].iov_len -= sent;
+            break;
+        }
+    }
+}
+
 HttpWriteResult HttpConnection::write() {
-    // 第一阶段 发送响应头
+    struct iovec iov[2];
+    iov[0].iov_base = write_buf_;
+    iov[0].iov_len = write_idx_;
+    iov[1].iov_base = file_addr_;
+    iov[1].iov_len = file_size_;
 
-    while (head_sent_ < write_idx_) {
-        int len = ::write(fd_, write_buf_ + head_sent_, write_idx_ - head_sent_);
+    int iovcnt = file_size_ == 0 ? 1 : 2;
+    int total_size = write_idx_ + file_size_;
+    int total_sent = 0;
 
-        if (len == -1) {
-            // 发送缓冲区满了，等下次 epoll 触发 EPOLLOUT 再发
-            // 这不是错误，所以返回 true 保持连接
-            if (errno == EAGAIN || errno == EWOULDBLOCK) return HttpWriteResult::AGAIN;
-            if (errno == EINTR) continue;
-            // 真正错误
-            return HttpWriteResult::ERROR;
-        }
+    while (total_sent < total_size) {
+        int len = ::writev(fd_, iov, iovcnt);
 
-        head_sent_ += len;
-    }
-
-    write_idx_ = 0;
-    std::cout << "write called: head_sent_=" << head_sent_ << " write_idx_=" << write_idx_
-              << " file_sent_=" << file_sent_ << " file_size_=" << file_size_
-              << " file_addr_=" << file_addr_ << std::endl;
-    while (file_sent_ < file_size_) {
-        int len = ::write(fd_, (char*)file_addr_ + file_sent_, file_size_ - file_sent_);
-        if (len == -1) {
+        if (len > 0) {
+            adjust_iov(iov, iovcnt, len);
+        } else {
             if (errno == EAGAIN || errno == EWOULDBLOCK) return HttpWriteResult::AGAIN;
             if (errno == EINTR) continue;
             return HttpWriteResult::ERROR;
         }
-        file_sent_ += len;
     }
+
     reset();
     return HttpWriteResult::DONE;
 }
