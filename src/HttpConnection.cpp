@@ -1,4 +1,5 @@
 #include "HttpConnection.h"
+#include "LogMacro.h"
 
 #include <fcntl.h>
 #include <stdarg.h>
@@ -85,7 +86,7 @@ HttpWriteResult HttpConnection::write() {
 
 bool HttpConnection::process() {
     if (parse_request_line(read_buf_) != HttpParseResult::OK) {
-        std::cout << "parse eror!" << std::endl;
+        LOG_ERROR("Parse eror!"); 
         return false;
     }
 
@@ -93,17 +94,16 @@ bool HttpConnection::process() {
 
     std::string file_path = "resources" + url_;
 
-    std::cout << "file:" << file_path << std::endl;
-
+    LOG_DEBUG("Client[fd=%d] request file [%s].", fd_, file_path);
     struct stat file_stat;
     if (stat(file_path.c_str(), &file_stat) == -1) {
-        std::cout << 404 << std::endl;
+        LOG_DEBUG("file error! response code = %d.", 404);
         build_error_response(404, "Not Found");
         return true;
     }
 
     if (!S_ISREG(file_stat.st_mode) || !(file_stat.st_mode & S_IROTH)) {
-        std::cout << 403 << std::endl;
+        LOG_DEBUG("file error! response code = %d.", 403);
         build_error_response(403, "Forbidden");
         return true;
     }
@@ -114,14 +114,13 @@ bool HttpConnection::process() {
     ::close(file_fd);
 
     if (file_addr_ == MAP_FAILED) {
-        std::cout << 500 << std::endl;
+        LOG_DEBUG("file error! response code = %d.", 500);
         build_error_response(500, "Internal Server Error");
         return true;
     }
     file_size_ = file_stat.st_size;
-    std::cout << 200 << std::endl;
+    LOG_DEBUG("Successful to mapping file! file_size = %d.", file_size_);
     build_ok_response(200, file_stat.st_size);
-
     return true;
 }
 
