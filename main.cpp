@@ -11,11 +11,29 @@
 #include <iostream>
 
 #include "HttpConnection.h"
+#include "Logger.h"
+#include "LogMacro.h"
 #define MAX_EVENTS 1024
 
 int setNonBlock(int fd) { return fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK); }
 
 int main() {
+
+    LogConfig config;
+    config.log_dir = "logs";
+    config.log_base_name = "WebServer";
+    config.async_mode = true;
+    config.queue_capacity = 2048;
+    config.min_level = LogLevel::DEBUG;
+
+    if (!Logger::getInstance().init(config)) {
+        perror("Fail to initialize Logger.");
+        return -1;
+    }
+
+    LOG_INFO("Logger initialize successfully");
+    LOG_INFO("WebServer starting...");
+
     int serv_fd = socket(AF_INET, SOCK_STREAM, 0);
 
     int opt = 1;
@@ -27,14 +45,14 @@ int main() {
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
     if (bind(serv_fd, (sockaddr*)&addr, sizeof(addr)) == -1) {
-        perror("fail to bind!");
+        LOG_ERROR("Fail to bind.");
         return 1;
     }
 
     setNonBlock(serv_fd);
 
     if (-1 == listen(serv_fd, 128)) {
-        perror("fail to listen");
+        LOG_ERROR("Fail to listen.");
     }
     int epfd = epoll_create1(0);
 
@@ -53,21 +71,21 @@ int main() {
 
             // 新连接
             if (fd == serv_fd) {
+                LOG_DEBUG("New connection.");
                 while (true) {
                     int client_fd = accept(serv_fd, nullptr, nullptr);
                     if (client_fd == -1) {
                         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                            std::cout << "no more connetion!" << std::endl;
                             break;
                         }
                         if (errno == EINTR) continue;
                         if (errno == ECONNABORTED) continue;
                         if (errno == EMFILE || ENFILE) {
                             // fd 耗尽
-                            perror("fd exhausted!");
+                            LOG_ERROR("The fd exhausted.");
                             break;
                         }
-                        perror("fail to accept!");
+                        LOG_ERROR("Fail to accept.");
                         break;
                     }
                     epoll_event ev{};
@@ -75,43 +93,41 @@ int main() {
                     ev.events = EPOLLIN | EPOLLET | EPOLLRDHUP | EPOLLONESHOT;
                     setNonBlock(client_fd);
                     epoll_ctl(epfd, EPOLL_CTL_ADD, client_fd, &ev);
-
-                    std::cout << "new connection fd = " << client_fd << std::endl;
+                    LOG_INFO("New connection fd = %d", client_fd);
                 }
             } else {
-                std::cout << "other events" << std::endl;
+                LOG_DEBUG("Other events.");
                 HttpConnection* conn = static_cast<HttpConnection*>(events[i].data.ptr);
                 int cur_fd = conn->getfd();
 
                 if (events[i].events & (EPOLLHUP | EPOLLERR | EPOLLRDHUP)) {
                     epoll_ctl(epfd, EPOLL_CTL_DEL, cur_fd, nullptr);
                     delete conn;
-                    std::cout << "fd = " << cur_fd << " close!" << std::endl;
+                    LOG_DEBUG("fd = %d is closed.");
                     continue;
                 } else if (events[i].events & EPOLLIN) {
                     conn->reset();
                     HttpReadResult res = conn->read();
                     if (res == HttpReadResult::ERROR) {
-                        std::cout << "fail to read fd = " << cur_fd << std::endl;
+                        LOG_ERROR("Fail to read fd = %d", cur_fd);
                         epoll_ctl(epfd, EPOLL_CTL_DEL, cur_fd, nullptr);
                         delete conn;
                         continue;
                     } else if (res == HttpReadResult::PEER_CLOSE) {
-                        std::cout << "peer closed fd=" << cur_fd << std::endl;  // 正常关闭
+                        LOG_DEBUG("Peer closed fd = %d.", cur_fd);
                         epoll_ctl(epfd, EPOLL_CTL_DEL, cur_fd, nullptr);
                         delete conn;
                         continue;
                     }
 
                     if (conn->process()) {
-                        std::cout << "process done! method = [" << conn->get_method() << "] url = ["
-                                  << conn->get_url() << "] version = [" << conn->get_version()
-                                  << "]" << std::endl;
+                        LOG_DEBUG("Process done.\n method = [%s], url = [%s], version = [%s].",
+                                    conn->get_method(), conn->get_url(), conn->get_version());
                         epoll_event ev{};
                         ev.data.ptr = conn;
                         ev.events = EPOLLOUT | EPOLLET | EPOLLRDHUP | EPOLLONESHOT;
                         epoll_ctl(epfd, EPOLL_CTL_MOD, cur_fd, &ev);
-                        std::cout << "switch to EPOLLOUT" << std::endl;
+                        LOG_DEBUG("Switch to EPOLLOUT.");
                     }
                 } else if (events[i].events & EPOLLOUT) {
                     HttpWriteResult res = conn->write();
@@ -120,9 +136,9 @@ int main() {
                         ev.data.ptr = conn;
                         ev.events = EPOLLIN | EPOLLET | EPOLLRDHUP | EPOLLONESHOT;
                         epoll_ctl(epfd, EPOLL_CTL_MOD, cur_fd, &ev);
-                        std::cout << "switch to EPOLLIN" << std::endl;
+                        LOG_DEBUG("Switch to EPOLLIN.");
                     } else if (res == HttpWriteResult::ERROR) {
-                        std::cout << "fail to wirte fd = " << cur_fd << std::endl;
+                        LOG_ERROR("Fail to write fd = %d.", cur_fd);
                         epoll_ctl(epfd, EPOLL_CTL_DEL, cur_fd, nullptr);
                         delete conn;
                     }
@@ -130,7 +146,7 @@ int main() {
             }
         }
     }
-
+    Logger::getInstance().stop();
     std::cout << "hello world!\n";
     return 0;
 }

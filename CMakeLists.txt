@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.10)
 
 project(MyWebServer)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -21,7 +21,7 @@ file(GLOB SOURCES ${PROJECT_SOURCE_DIR}/src/*.cpp)
 
 set(SOURCES main.cpp ${SOURCES})
 
-include_directories(include)
+include_directories(include/http include/logger)
 
 set(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
 
