@@ -25,11 +25,13 @@ int main() {
     config.async_mode = true;
     config.queue_capacity = 2048;
     config.min_level = LogLevel::DEBUG;
+    config.max_file_size = 10 * 1024;
 
-    if (!Logger::getInstance().init(config)) {
-        perror("Fail to initialize Logger.");
-        return -1;
-    }
+    config.flush_every_n_bytes = 64 * 1024;
+    config.flush_every_n_message = 64;
+    config.flush_internal_ms = 1000;
+
+    LoggerGuard logger_guard(config);
 
     LOG_INFO("Logger initialize successfully");
     LOG_INFO("WebServer starting...");
