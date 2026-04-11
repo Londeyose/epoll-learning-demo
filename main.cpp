@@ -4,6 +4,7 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <unordered_map>
 
 #include <cerrno>
 #include <cstdio>
@@ -13,7 +14,9 @@
 #include "HttpConnection.h"
 #include "Logger.h"
 #include "LogMacro.h"
-#define MAX_EVENTS 1024
+#include "Epoller.h"
+
+#define MAX_EVENTS 1024 
 
 int setNonBlock(int fd) { return fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK); }
 
@@ -56,20 +59,16 @@ int main() {
     if (-1 == listen(serv_fd, 128)) {
         LOG_ERROR("Fail to listen.");
     }
-    int epfd = epoll_create1(0);
 
-    epoll_event ev{}, events[MAX_EVENTS];
-
-    ev.events = EPOLLIN | EPOLLET;
-    ev.data.fd = serv_fd;
-
-    epoll_ctl(epfd, EPOLL_CTL_ADD, serv_fd, &ev);
+    Epoller epoller(MAX_EVENTS);
+    std::unordered_map<int, HttpConnection> users;
+    epoller.addfd(serv_fd, EPOLLIN | EPOLLET);
 
     while (true) {
-        int n = epoll_wait(epfd, events, MAX_EVENTS, -1);
+        int n = epoller.wait(-1);
 
         for (int i = 0; i < n; ++i) {
-            int fd = events[i].data.fd;
+            int fd = epoller.getEventFd(i);
 
             // 新连接
             if (fd == serv_fd) {
@@ -90,59 +89,55 @@ int main() {
                         LOG_ERROR("Fail to accept.");
                         break;
                     }
-                    epoll_event ev{};
-                    ev.data.ptr = new HttpConnection(client_fd);
-                    ev.events = EPOLLIN | EPOLLET | EPOLLRDHUP | EPOLLONESHOT;
+                    epoller.addfd(client_fd, EPOLLIN | EPOLLET | EPOLLRDHUP | EPOLLONESHOT);
+                    users.try_emplace(client_fd, client_fd);
                     setNonBlock(client_fd);
-                    epoll_ctl(epfd, EPOLL_CTL_ADD, client_fd, &ev);
                     LOG_INFO("New connection fd = %d", client_fd);
                 }
             } else {
                 LOG_DEBUG("Other events.");
-                HttpConnection* conn = static_cast<HttpConnection*>(events[i].data.ptr);
-                int cur_fd = conn->getfd();
-
-                if (events[i].events & (EPOLLHUP | EPOLLERR | EPOLLRDHUP)) {
-                    epoll_ctl(epfd, EPOLL_CTL_DEL, cur_fd, nullptr);
-                    delete conn;
+                auto it = users.find(fd);
+                if (it == users.end()) {
+                    LOG_ERROR("Cant find HttpConnection for fd = %d.", fd);
+                    continue;
+                }
+                HttpConnection& conn = it->second;
+                uint32_t events = epoller.getEvents(i);
+                if (events & (EPOLLHUP | EPOLLERR | EPOLLRDHUP)) {
+                    epoller.delfd(fd);
+                    users.erase(fd);
                     LOG_DEBUG("fd = %d is closed.");
                     continue;
-                } else if (events[i].events & EPOLLIN) {
-                    conn->reset();
-                    HttpReadResult res = conn->read();
+                } else if (events & EPOLLIN) {
+                    conn.reset();
+                    HttpReadResult res = conn.read();
                     if (res == HttpReadResult::ERROR) {
-                        LOG_ERROR("Fail to read fd = %d", cur_fd);
-                        epoll_ctl(epfd, EPOLL_CTL_DEL, cur_fd, nullptr);
-                        delete conn;
+                        LOG_ERROR("Fail to read fd = %d", fd);
+                        epoller.delfd(fd);
+                        users.erase(fd);
                         continue;
                     } else if (res == HttpReadResult::PEER_CLOSE) {
-                        LOG_DEBUG("Peer closed fd = %d.", cur_fd);
-                        epoll_ctl(epfd, EPOLL_CTL_DEL, cur_fd, nullptr);
-                        delete conn;
+                        LOG_DEBUG("Peer closed fd = %d.", fd);
+                        epoller.delfd(fd);
+                        users.erase(fd);
                         continue;
                     }
 
-                    if (conn->process()) {
+                    if (conn.process()) {
                         LOG_DEBUG("Process done.\n method = [%s], url = [%s], version = [%s].",
-                                    conn->get_method(), conn->get_url(), conn->get_version());
-                        epoll_event ev{};
-                        ev.data.ptr = conn;
-                        ev.events = EPOLLOUT | EPOLLET | EPOLLRDHUP | EPOLLONESHOT;
-                        epoll_ctl(epfd, EPOLL_CTL_MOD, cur_fd, &ev);
+                                    conn.get_method().c_str(), conn.get_url().c_str(), conn.get_version().c_str());
+                        epoller.modfd(fd, EPOLLOUT | EPOLLET | EPOLLRDHUP | EPOLLONESHOT);
                         LOG_DEBUG("Switch to EPOLLOUT.");
                     }
-                } else if (events[i].events & EPOLLOUT) {
-                    HttpWriteResult res = conn->write();
+                } else if (events & EPOLLOUT) {
+                    HttpWriteResult res = conn.write();
                     if (res == HttpWriteResult::DONE) {
-                        epoll_event ev{};
-                        ev.data.ptr = conn;
-                        ev.events = EPOLLIN | EPOLLET | EPOLLRDHUP | EPOLLONESHOT;
-                        epoll_ctl(epfd, EPOLL_CTL_MOD, cur_fd, &ev);
+                        epoller.modfd(fd, EPOLLIN | EPOLLET | EPOLLRDHUP | EPOLLONESHOT);
                         LOG_DEBUG("Switch to EPOLLIN.");
                     } else if (res == HttpWriteResult::ERROR) {
-                        LOG_ERROR("Fail to write fd = %d.", cur_fd);
-                        epoll_ctl(epfd, EPOLL_CTL_DEL, cur_fd, nullptr);
-                        delete conn;
+                        LOG_ERROR("Fail to write fd = %d.", fd);
+                        epoller.delfd(fd);
+                        users.erase(fd);
                     }
                 }
             }

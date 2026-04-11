@@ -32,6 +32,7 @@ bool Logger::init(const LogConfig& config) {
     current_file_size_ = 0;
 
     if (!open_log_file()) {
+        perror("Fail to open log file!");
         return false;
     }
 
@@ -222,6 +223,18 @@ std::string Logger::format_message(LogLevel level, const char* file, int line, c
 
 bool Logger::open_log_file() {
     std::string file_name = build_log_file_name(current_date_, current_file_index_);
+    std::cout << "log_file_name : " << file_name << std::endl;
+    // 1. 先检查并创建文件夹
+    try {
+        if (!fs::exists(config_.log_dir)) {
+            // create_directories 会递归创建所有不存在的父目录
+            fs::create_directories(config_.log_dir); 
+            std::cout << "Create the log dir." << std::endl;
+        }
+    } catch (const fs::filesystem_error& e) {
+        std::cerr << "Fail to create the log dir." << e.what() << std::endl;
+        return 1;
+    }
     log_file_.open(file_name, std::ios::out | std::ios::app);
     if (!log_file_.is_open()) {
         return false;

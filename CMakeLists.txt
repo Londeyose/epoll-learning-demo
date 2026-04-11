@@ -21,9 +21,12 @@ file(GLOB SOURCES ${PROJECT_SOURCE_DIR}/src/*.cpp)
 
 set(SOURCES main.cpp ${SOURCES})
 
-include_directories(include/http include/logger)
-
-set(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
-
 add_executable (app ${SOURCES})
 
+target_include_directories(app PRIVATE
+    include/http
+    include/logger
+    include/epoll
+)
+
+set(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
