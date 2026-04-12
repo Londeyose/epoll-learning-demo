@@ -94,7 +94,7 @@ bool HttpConnection::process() {
 
     std::string file_path = "resources" + url_;
 
-    LOG_DEBUG("Client[fd=%d] request file [%s].", fd_, file_path);
+    LOG_DEBUG("Client[fd=%d] request file [%s].", fd_, file_path.c_str());
     struct stat file_stat;
     if (stat(file_path.c_str(), &file_stat) == -1) {
         LOG_DEBUG("file error! response code = %d.", 404);

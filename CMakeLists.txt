@@ -27,6 +27,7 @@ target_include_directories(app PRIVATE
     include/http
     include/logger
     include/epoll
+    include/webserver
 )
 
 set(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
