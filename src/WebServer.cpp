@@ -95,7 +95,9 @@ bool WebServer::initListenSocket() {
 
 void WebServer::eventLoop() {
     while (is_running_) {
-        int n = epoller_.wait(timeout_ms_);
+        int timeout = timer_.getNextTick();
+        int n = epoller_.wait(timeout);
+        timer_.tick();
         if (-1 == n) {
             if (errno == EINTR) continue;
             LOG_ERROR("epoll wait error.");
@@ -106,7 +108,15 @@ void WebServer::eventLoop() {
             uint32_t events = epoller_.getEvents(i);
             if (fd == server_fd_) {
                 handleListen();
-            }else if (events & (EPOLLHUP | EPOLLERR | EPOLLRDHUP)) {
+                continue;
+            } 
+
+            if (user_.find(fd) == user_.end()) {
+                continue;
+            }
+            
+            if (events & (EPOLLHUP | EPOLLERR | EPOLLRDHUP)) {
+                LOG_INFO("Client(fd = %d) close this connection.", fd);
                 closeConn(fd);
             } else {
                 LOG_INFO("READ/WRITE event comming.");
@@ -133,6 +143,9 @@ void WebServer::handleListen() {
             ::close(client_fd);
             continue;
         }
+        timer_.add(client_fd, timeout_ms_, [this, client_fd]() {
+            this->closeConn(client_fd);
+        });
         LOG_INFO("New connection client(fd = %d).", client_fd);
     }
 }
@@ -162,6 +175,8 @@ void WebServer::handleRead(int fd) {
     if (!epoller_.modfd(fd, kWriteEvent)) {
         LOG_ERROR("Fail to modify events which fd = %d.", fd);
     }
+
+    timer_.adjust(fd, timeout_ms_);
 }
 
 void WebServer::handleWrite(int fd) {
@@ -196,5 +211,6 @@ void WebServer::closeConn(int fd) {
     } else {
         ::close(fd);
     }
+    timer_.remove(fd);
     LOG_INFO("Close the connection, fd = %d.", fd);
 }
