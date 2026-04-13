@@ -86,7 +86,7 @@ HttpWriteResult HttpConnection::write() {
 
 bool HttpConnection::process() {
     if (parse_request_line(read_buf_) != HttpParseResult::OK) {
-        LOG_ERROR("Parse eror!"); 
+        LOG_ERROR("Parse eror! read_buf = {%s}", read_buf_); 
         return false;
     }
 
@@ -235,7 +235,7 @@ void HttpConnection::build_ok_response(int code, size_t file_size) {
     // 开始构建响应
     add_response("%s %d %s\r\n", "HTTP/1.1", code, "OK");
     add_response("Content-Type: %s\r\n", get_content_type(url_));
-    add_response("Connection: %s\r\n", "close");
+    add_response("Connection: %s\r\n", "keep-alive");
     add_response("Content-Length: %d\r\n", file_size);
     add_response("\r\n");  // 关键的空行
 }

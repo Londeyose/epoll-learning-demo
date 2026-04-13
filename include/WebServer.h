@@ -1,6 +1,6 @@
 #include "HttpConnection.h"
 #include "Epoller.h"
-
+#include "HeapTimer.h"
 #include <unordered_map>
 class WebServer {
 public:
@@ -29,5 +29,6 @@ private:
     bool is_running_;
 
     Epoller epoller_;
+    HeapTimer timer_;
     std::unordered_map<int, HttpConnection> user_;
 };

@@ -37,7 +37,7 @@ int main() {
     LOG_INFO("Logger initialize successfully");
     LOG_INFO("WebServer starting...");
 
-    WebServer webserver(8888);
+    WebServer webserver(8888, 1, 10000);
     webserver.start();
 
     Logger::getInstance().stop();
