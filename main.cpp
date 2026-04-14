@@ -4,22 +4,20 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include <unordered_map>
 
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <unordered_map>
 
-#include "HttpConnection.h"
-#include "Logger.h"
-#include "LogMacro.h"
 #include "Epoller.h"
+#include "HttpConnection.h"
+#include "LogMacro.h"
+#include "Logger.h"
 #include "WebServer.h"
 
-
 int main() {
-
     LogConfig config;
     config.log_dir = "logs";
     config.log_base_name = "WebServer";
@@ -37,7 +35,7 @@ int main() {
     LOG_INFO("Logger initialize successfully");
     LOG_INFO("WebServer starting...");
 
-    WebServer webserver(8888, 1, 10000);
+    WebServer webserver(8888, 1, 30000);
     webserver.start();
 
     Logger::getInstance().stop();

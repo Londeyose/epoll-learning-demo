@@ -1,5 +1,7 @@
 #include "HeapTimer.h"
+
 #include <iostream>
+
 #include "LogMacro.h"
 void HeapTimer::sift_up(size_t index) {
     while (index > 0) {
@@ -40,7 +42,7 @@ void HeapTimer::add(int fd, int timeout, const TimeoutCallback& cb) {
         LOG_ERROR("client(fd=%d) has been added into heap_.", fd);
         return;
     }
-    size_t index = heap_.size(); 
+    size_t index = heap_.size();
     ref_[fd] = index;
     heap_.push_back({fd, Clock::now() + MS(timeout), cb});
     sift_up(index);
@@ -56,7 +58,7 @@ void HeapTimer::doWork(int fd) {
 }
 
 void HeapTimer::remove(int fd) {
-        if (heap_.empty() || ref_.find(fd) == ref_.end()) {
+    if (heap_.empty() || ref_.find(fd) == ref_.end()) {
         return;
     }
     size_t i = ref_[fd];
@@ -91,8 +93,7 @@ void HeapTimer::tick() {
         if (node.expires > Clock::now()) {
             break;
         }
-        node.cb();
-        pop();
+        doWork(node.fd);
     }
 }
 
@@ -110,9 +111,7 @@ int HeapTimer::getNextTick() {
     tick();
     if (heap_.empty()) return -1;
 
-    int res = std::chrono::duration_cast<MS>(
-        heap_.front().expires - Clock::now()
-    ).count();
+    int res = std::chrono::duration_cast<MS>(heap_.front().expires - Clock::now()).count();
 
     return res > 0 ? res : 0;
 }

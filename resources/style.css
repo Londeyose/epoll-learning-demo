@@ -1,25 +1,212 @@
+:root {
+    --bg-color: #0C0C0C;
+    --header-bg: #2E2E2E;
+    --text-color: #58a6ff;
+    --bug-color: #f85149;
+    --terminal-green: #238636;
+    --glow-green: #3fb950;
+}
+
 body {
-    background-color: #f0f2f5;
-    font-family: sans-serif;
+    margin: 0;
+    background: radial-gradient(circle at 30% 20%, #f5f7fa 0%, #e8edf3 45%, #dde4ec 100%);
     display: flex;
     justify-content: center;
-    padding-top: 50px;
+    align-items: center;
+    height: 100vh;
+    font-family: 'Consolas', 'Courier New', monospace;
+    overflow: hidden;
 }
 
-.container {
-    background: white;
-    padding: 2rem;
-    border-radius: 12px;
-    shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+/* 手机外壳：多层重阴影增强质感 */
+.phone-wrapper {
+    width: 360px;
+    height: 640px;
+    background: linear-gradient(160deg, #0f1217 0%, #1a2029 55%, #252d39 100%);
+    border: 12px solid #3a4454;
+    border-radius: 50px;
+    position: relative;
+    box-shadow: 
+        0 22px 55px rgba(0, 0, 0, 0.35),
+        0 45px 100px rgba(0, 0, 0, 0.22),
+        inset 0 2px 6px rgba(255, 255, 255, 0.08),
+        inset 0 -8px 14px rgba(0, 0, 0, 0.22);
+    transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
-h1 {
-    color: #1a73e8;
+.phone-wrapper:hover {
+    transform: translateY(-5px);
 }
 
-.status-card {
-    background: #e8f0fe;
-    padding: 10px;
-    border-radius: 8px;
-    border-left: 5px solid #1a73e8;
+/* 刘海屏装饰 */
+.phone-notch {
+    position: absolute;
+    top: 0; left: 50%;
+    transform: translateX(-50%);
+    width: 150px; height: 25px;
+    background: linear-gradient(180deg, #2a313d 0%, #1d232d 100%);
+    border: 1px solid rgba(132, 146, 166, 0.3);
+    border-bottom-left-radius: 15px;
+    border-bottom-right-radius: 15px;
+    z-index: 60;
+}
+
+.phone-screen {
+    width: 100%;
+    height: 100%;
+    background-color: var(--bg-color);
+    display: flex;
+    flex-direction: column;
+    border-radius: 38px; 
+    overflow: hidden;
+    position: relative;
+}
+
+/* 顶部 UI 容器高度增加，适配大字体 */
+#dashboard {
+    height: 40px; /* 从 60px 增加到 70px */
+    background: var(--header-bg);
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    padding: 20px 5px 0 5px; /* 增加顶部 padding 避开刘海 */
+    /* border-bottom: 3px solid var(--terminal-green); */
+    box-shadow: 0 4px 15px rgba(0,0,0,0.6);
+    z-index: 50;
+}
+
+/* 调大每个统计项的字体 */
+.stat-item {
+    font-size: 0.95rem; /* 从 0.75rem 增加到 0.95rem */
+    color: var(--text-color);
+    font-weight: 900; /* 加粗 */
+    text-shadow: 0 0 5px rgba(0,0,0,0.5);
+}
+
+/* 让数值部分更加醒目 */
+.stat-item span {
+    color: #fff;
+    font-size: 1.1rem; /* 数值比标签大一点 */
+    margin-left: 2px;
+}
+
+#game-canvas {
+    flex: 1;
+    position: relative;
+    background-image: radial-gradient(#1f242c 1px, transparent 0);
+    background-size: 25px 25px;
+}
+
+/* Bug 样式 */
+.bug {
+    position: absolute;
+    padding: 6px 10px;
+    border: 1px solid var(--bug-color);
+    background: rgba(248, 81, 73, 0.15);
+    color: var(--bug-color);
+    font-size: 0.75rem;
+    font-weight: bold;
+    border-radius: 4px;
+    cursor: pointer;
+    z-index: 10;
+    animation: bugFlash 0.4s infinite alternate;
+    font-size: 0.85rem; /* 从 0.75rem 略微增加 */
+    padding: 8px 12px;  /* 增加点击区域 */ 
+}
+
+@keyframes bugFlash {
+    from { box-shadow: 0 0 2px var(--bug-color); }
+    to { box-shadow: 0 0 10px var(--bug-color); }
+}
+
+/* 按钮发光与呼吸动画 */
+button {
+    padding: 14px 40px;
+    font-size: 1rem;
+    font-weight: bold;
+    color: white;
+    background-color: var(--terminal-green);
+    border: none;
+    border-radius: 30px;
+    cursor: pointer;
+    font-family: inherit;
+    box-shadow: 0 0 15px rgba(35, 134, 54, 0.4);
+    animation: buttonGlow 2s infinite ease-in-out;
+}
+
+@keyframes buttonGlow {
+    0%, 100% { box-shadow: 0 0 10px rgba(63, 185, 80, 0.4); transform: scale(1); }
+    50% { box-shadow: 0 0 25px rgba(63, 185, 80, 0.8); transform: scale(1.05); }
+}
+
+button:hover {
+    background-color: var(--glow-green);
+    box-shadow: 0 0 30px rgba(63, 185, 80, 1);
+}
+
+#overlay {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(13, 17, 23, 0.95);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 100;
+}
+
+#title { color: var(--bug-color); text-shadow: 0 0 10px rgba(248, 81, 73, 0.5); }
+
+#final-score {
+    color: #ffffff;
+    font-size: 1.1rem;
+    font-weight: bold;
+    margin: 12px 0 6px;
+    text-shadow: 0 0 8px rgba(88, 166, 255, 0.35);
+}
+
+#leaderboard {
+    display: none; /* 初始隐藏 */
+    margin: 20px 0;
+    width: 85%;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 10px;
+    padding: 15px;
+    border: 1px dashed var(--terminal-green);
+}
+
+#leaderboard h3 {
+    margin-top: 0;
+    font-size: 1rem;
+    color: var(--terminal-green);
+    border-bottom: 1px solid var(--terminal-green);
+    padding-bottom: 5px;
+}
+
+#scores-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    text-align: left;
+}
+
+
+/* 确保最终分数和排行榜在初始状态下不占据空间 */
+#final-score, #leaderboard {
+    display: none; 
+}
+
+/* 增加排行榜内部的样式确保文字颜色可见 */
+#scores-list li {
+    display: flex;
+    justify-content: space-between;
+    font-size: 1rem;
+    padding: 8px 0;
+    color: #fff; /* 确保文字是白色的 */
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.rank-score {
+    color: var(--text-color);
+    font-weight: bold;
 }

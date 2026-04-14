@@ -3,19 +3,41 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>londey's Web Server</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bug</title>
     <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
-    <div class="container">
-        <h1>🚀 你的 C++ 服务器正在运行</h1>
-        <p>这是从 <code>resources/index.html</code> 读取的静态页面。</p>
-        <div class="status-card">
-            <p><strong>当前状态：</strong> 运行中</p>
-            <p><strong>底层驱动：</strong> Epoll (ET 模式)</p>
+
+    <div class="phone-wrapper">
+        <div class="phone-notch"></div>
+
+        <div class="phone-screen">
+            <div id="dashboard">
+                <div class="stat-item user-info">USER: <span>Admin</span></div>
+                <div class="stat-item">SCORE: <span id="score">0</span></div>
+                <div class="stat-item">HP: <span id="hp">100</span>%</div>
+            </div>
+
+            <div id="game-canvas"></div>
+
+            <div id="overlay">
+                <h2 id="title">SYSTEM ERROR</h2>
+                <p id="final-score"></p>
+
+                <div id="leaderboard">
+                    <h3>TOP DEVELOPERS</h3>
+                    <ul id="scores-list">
+                    </ul>
+                </div>
+
+                <button id="start-btn">DEPLOY TO PROD</button>
+            </div>
         </div>
     </div>
+
+    <script src="script.js"></script>
 </body>
 
 </html>
