@@ -1,86 +1,79 @@
 #pragma once
 
+#include <arpa/inet.h>
+#include <sys/stat.h>
 #include <sys/uio.h>
 
-#include <cstddef>
 #include <string>
 
-using std::string;
-
-enum class ParseState { REQUEST_LINE, HEADERS, BODY, FINISH };
-
-enum class LineStatus { LINE_OK, LINE_BAD, LINE_OPEN };
-
-enum class HttpParseResult { OK, INVALID_METHOD, INVALID_VERSION, INVALID_REQUEST, INCOMPLETE };
-
-enum class HttpReadResult { DONE, PEER_CLOSE, ERROR };
-
-enum class HttpWriteResult { DONE, AGAIN, ERROR };
+#include "HttpRequest.h"
+#include "HttpResponse.h"
 
 class HttpConnection {
 public:
-    HttpConnection(int fd);
+    static constexpr int READ_BUFFER_SIZE = 4096;
+    static constexpr int WRITE_BUFFER_SIZE = 4096;
+    static const char* src_dir_;
+
+public:
+    enum class HttpReadResult {
+        DONE,
+        PEER_CLOSE,
+        ERROR
+    };
+
+    enum class HttpWriteResult {
+        DONE,
+        AGAIN,
+        ERROR
+    };
+
+public:
+    HttpConnection();
     ~HttpConnection();
+
+    void init(int fd, const sockaddr_in& addr);
+    void closeConn();
 
     HttpReadResult read();
     HttpWriteResult write();
 
-    bool process();
-    bool process_request();
+    bool process();     // 解析请求并准备响应
+    void reset();       // keep-alive 复用时重置状态
 
-    void close();
-    int getfd();
-
-    string get_method();
-    string get_url();
-    string get_version();
-
-    void reset();
-    bool is_keep_alive() const;
-    void prepare_for_next_request();
+    bool isKeepAlive() const { return keep_alive_; }
+    bool needClose() const { return !keep_alive_; }
+    int fd() const { return fd_; }
 
 private:
-    LineStatus parse_line();
-    HttpParseResult process_read();
-    HttpParseResult parse_request_line(char* text);
-    HttpParseResult parse_headers(char* text);
+    bool makeResponse();
+    bool prepareWrite();
+    bool prepareErrorResponse();
 
-    bool add_response(const char* format, ...);
-    void build_ok_response(int code, size_t file_size);
-    void build_error_response(int code, const char* reason);
-    static const char* get_content_type(const string& url);
-
-    void reset_request_state();
-    void reset_response_state();
-    void compact_read_buffer();
-
-    void adjust_iov(struct iovec* iov, int iovcnt, int sent);
+    bool mapFile(const std::string& path);
+    void unmapFile();
 
 private:
-    static constexpr int READ_BUFFER_SIZE = 2048;
-    static constexpr int WRITE_BUFFER_SIZE = 2048;
-
     int fd_;
-    size_t read_idx_;
-    size_t write_idx_;
+    sockaddr_in addr_;
+
     char read_buf_[READ_BUFFER_SIZE];
+    int read_idx_;
+
     char write_buf_[WRITE_BUFFER_SIZE];
+    int write_idx_;
 
-    size_t checked_idx_;
-    size_t start_line_;
+    struct iovec iov_[2];
+    int iov_cnt_;
 
-    ParseState parse_state_;
+    int bytes_to_send_;
+    int bytes_have_sent_;
 
-    string method_;
-    string url_;
-    string version_;
-    string host_;
+    char* file_addr_;
+    struct stat file_stat_;
 
-    size_t content_length_;
     bool keep_alive_;
 
-    void* file_addr_ = nullptr;
-    size_t file_size_ = 0;
-    size_t head_sent_ = 0;
-    size_t file_sent_ = 0;
+    HttpRequest request_;
+    HttpResponse response_;
 };
