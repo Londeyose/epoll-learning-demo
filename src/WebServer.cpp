@@ -126,7 +126,9 @@ void WebServer::eventLoop() {
 
 void WebServer::handleListen() {
     while (true) {
-        int client_fd = ::accept(server_fd_, nullptr, nullptr);
+        sockaddr_in addr{};
+        socklen_t len = sizeof(addr);
+        int client_fd = ::accept(server_fd_, (sockaddr*)&addr, &len);
         if (client_fd == -1) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) break;
             if (errno == EINTR) continue;
@@ -134,7 +136,7 @@ void WebServer::handleListen() {
             return;
         }
         setNonBlocking(client_fd);
-        user_.try_emplace(client_fd, client_fd);
+        user_[client_fd].init(client_fd, addr);
         if (!epoller_.addfd(client_fd, kReadEvent)) {
             LOG_ERROR("Fail to add client(fd = %d) to epoller_.", client_fd);
             ::close(client_fd);
@@ -155,9 +157,9 @@ void WebServer::handleRead(int fd) {
         return;
     }
     HttpConnection& conn = it->second;
-    HttpReadResult res = conn.read();
-    if (res != HttpReadResult::DONE) {
-        if (res == HttpReadResult::PEER_CLOSE) {
+    HttpConnection::HttpReadResult res = conn.read();
+    if (res != HttpConnection::HttpReadResult::DONE) {
+        if (res == HttpConnection::HttpReadResult::PEER_CLOSE) {
             LOG_INFO("Client(fd = %d) close connection.", fd);
         } else {
             LOG_ERROR("Fail to read from client(fd = %d)", fd);
@@ -187,20 +189,21 @@ void WebServer::handleWrite(int fd) {
         return;
     }
     HttpConnection& conn = it->second;
-    HttpWriteResult res = conn.write();
-    if (res == HttpWriteResult::DONE) {
+    HttpConnection::HttpWriteResult res = conn.write();
+    if (res == HttpConnection::HttpWriteResult::DONE) {
         LOG_INFO("Client(fd = %d) has been writed successfully, switching to read mode.", fd);
-        if (!conn.is_keep_alive()) {
+        if (!conn.isKeepAlive()) {
             LOG_INFO("Client(fd = %d) response sent, closing connection.", fd);
             closeConn(fd);
             return;
         }
+        conn.reset();
         if (!epoller_.modfd(fd, kReadEvent)) {
             LOG_ERROR("Fail to modify events which fd = %d.", fd);
             closeConn(fd);
             return;
         }
-    } else if (res == HttpWriteResult::AGAIN) {
+    } else if (res == HttpConnection::HttpWriteResult::AGAIN) {
         LOG_INFO("Continue to write data to client(fd = %d).", fd);
     } else {
         LOG_ERROR("Fail to write to client(fd = %d).", fd);
@@ -212,7 +215,7 @@ void WebServer::closeConn(int fd) {
     epoller_.delfd(fd);
     auto it = user_.find(fd);
     if (it != user_.end()) {
-        it->second.close();
+        it->second.closeConn();
         user_.erase(it);
     } else {
         ::close(fd);

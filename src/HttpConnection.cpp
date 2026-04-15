@@ -1,462 +1,264 @@
 #include "HttpConnection.h"
 
 #include <fcntl.h>
-#include <stdarg.h>
-#include <strings.h>
 #include <sys/mman.h>
-#include <sys/stat.h>
-#include <sys/uio.h>
 #include <unistd.h>
 
 #include <cerrno>
-#include <cstdarg>
-#include <cstddef>
-#include <cstdio>
 #include <cstring>
-#include <iostream>
-#include <string>
 
-#include "LogMacro.h"
+const char* HttpConnection::src_dir_ = "./resources";
 
-HttpConnection::HttpConnection(int fd)
-    : fd_(fd),
+HttpConnection::HttpConnection()
+    : fd_(-1),
       read_idx_(0),
       write_idx_(0),
+      iov_cnt_(0),
+      bytes_to_send_(0),
+      bytes_have_sent_(0),
       file_addr_(nullptr),
-      file_size_(0),
-      head_sent_(0),
-      file_sent_(0) {
-    read_buf_[0] = '\0';
-    write_buf_[0] = '\0';
-    checked_idx_ = 0;
-    start_line_ = 0;
-    parse_state_ = ParseState::REQUEST_LINE;
-    content_length_ = 0;
-    keep_alive_ = false;
+      keep_alive_(false) {
+    std::memset(read_buf_, 0, sizeof(read_buf_));
+    std::memset(write_buf_, 0, sizeof(write_buf_));
+    std::memset(&addr_, 0, sizeof(addr_));
+    std::memset(&file_stat_, 0, sizeof(file_stat_));
 }
 
-HttpConnection::~HttpConnection() { ::close(fd_); }
+HttpConnection::~HttpConnection() {
+    closeConn();
+}
 
-HttpReadResult HttpConnection::read() {
+void HttpConnection::init(int fd, const sockaddr_in& addr) {
+    fd_ = fd;
+    addr_ = addr;
+
+    read_idx_ = 0;
+    write_idx_ = 0;
+    iov_cnt_ = 0;
+    bytes_to_send_ = 0;
+    bytes_have_sent_ = 0;
+    keep_alive_ = false;
+
+    file_addr_ = nullptr;
+    std::memset(read_buf_, 0, sizeof(read_buf_));
+    std::memset(write_buf_, 0, sizeof(write_buf_));
+    std::memset(&file_stat_, 0, sizeof(file_stat_));
+
+    request_.init();
+    response_.init();
+}
+
+void HttpConnection::closeConn() {
+    unmapFile();
+    if (fd_ != -1) {
+        ::close(fd_);
+        fd_ = -1;
+    }
+}
+
+HttpConnection::HttpReadResult HttpConnection::read() {
     while (true) {
-        int remaining = READ_BUFFER_SIZE - read_idx_ - 1;
-        if (remaining <= 0) return HttpReadResult::ERROR;  // 缓冲区满了
+        int remain = READ_BUFFER_SIZE - read_idx_ - 1;
+        if (remain <= 0) {
+            return HttpReadResult::ERROR;
+        }
 
-        int len = ::read(fd_, read_buf_ + read_idx_, remaining);
-
+        ssize_t len = ::read(fd_, read_buf_ + read_idx_, remain);
         if (len > 0) {
-            read_idx_ += len;
-            read_buf_[read_idx_] = 0;
+            read_idx_ += static_cast<int>(len);
+            read_buf_[read_idx_] = '\0';
         } else if (len == 0) {
             return HttpReadResult::PEER_CLOSE;
         } else {
-            // 读完了， epoll 触发 EPOLLIN 再读
-            // 这不是错误，所以返回 true 保持连接
-            if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-            if (errno == EINTR) continue;
-            // 真正错误
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break;
+            }
+            if (errno == EINTR) {
+                continue;
+            }
             return HttpReadResult::ERROR;
         }
     }
     return HttpReadResult::DONE;
 }
 
-void HttpConnection::adjust_iov(struct iovec* iov, int iovcnt, int sent) {
-    for (int i = 0; i < iovcnt; ++i) {
-        if (sent >= (int)iov[i].iov_len) {
-            sent -= iov[i].iov_len;
-            iov[i].iov_len = 0;
-        } else {
-            iov[i].iov_base = (char*)iov[i].iov_base + sent;
-            iov[i].iov_len -= sent;
-            break;
-        }
+bool HttpConnection::process() {
+    response_.init();
+    unmapFile();
+
+    write_idx_ = 0;
+    iov_cnt_ = 0;
+    bytes_to_send_ = 0;
+    bytes_have_sent_ = 0;
+
+    auto ret = request_.parse(read_buf_, read_idx_);
+    if (ret == HttpRequest::ParseResult::INCOMPLELE) {
+        return false;
     }
+
+    if (ret == HttpRequest::ParseResult::ERROR) {
+        keep_alive_ = false;
+        return prepareErrorResponse();
+    }
+
+    keep_alive_ = request_.isKeepAlive();
+
+    if (!makeResponse()) {
+        return false;
+    }
+
+    return prepareWrite();
 }
 
-HttpWriteResult HttpConnection::write() {
-    struct iovec iov[2];
-    iov[0].iov_base = write_buf_;
-    iov[0].iov_len = write_idx_;
-    iov[1].iov_base = file_addr_;
-    iov[1].iov_len = file_size_;
+bool HttpConnection::makeResponse() {
+    return response_.build(request_, src_dir_, keep_alive_);
+}
 
-    int iovcnt = file_size_ == 0 ? 1 : 2;
-    int total_size = write_idx_ + file_size_;
-    int total_sent = 0;
+bool HttpConnection::prepareErrorResponse() {
+    static const char* bad_request =
+        "HTTP/1.1 400 Bad Request\r\n"
+        "Content-Type: text/html\r\n"
+        "Connection: close\r\n"
+        "Content-Length: 50\r\n"
+        "\r\n"
+        "<html><body><h1>400 Bad Request</h1></body></html>";
 
-    while (total_sent < total_size) {
-        int len = ::writev(fd_, iov, iovcnt);
+    int len = static_cast<int>(std::strlen(bad_request));
+    if (len >= WRITE_BUFFER_SIZE) {
+        return false;
+    }
 
-        if (len > 0) {
-            adjust_iov(iov, iovcnt, len);
-            total_sent += len;
-        } else {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) return HttpWriteResult::AGAIN;
-            if (errno == EINTR) continue;
+    std::memcpy(write_buf_, bad_request, len);
+    write_idx_ = len;
+
+    iov_[0].iov_base = write_buf_;
+    iov_[0].iov_len = write_idx_;
+    iov_cnt_ = 1;
+
+    bytes_to_send_ = write_idx_;
+    bytes_have_sent_ = 0;
+    return true;
+}
+
+bool HttpConnection::prepareWrite() {
+    const std::string& resp = response_.buffer();
+    if (static_cast<int>(resp.size()) >= WRITE_BUFFER_SIZE) {
+        return false;
+    }
+
+    std::memcpy(write_buf_, resp.data(), resp.size());
+    write_idx_ = static_cast<int>(resp.size());
+
+    iov_[0].iov_base = write_buf_;
+    iov_[0].iov_len = write_idx_;
+    iov_cnt_ = 1;
+
+    if (response_.statusCode() == 200) {
+        if (!mapFile(response_.filePath())) {
+            return false;
+        }
+
+        iov_[1].iov_base = file_addr_;
+        iov_[1].iov_len = file_stat_.st_size;
+        iov_cnt_ = 2;
+        bytes_to_send_ = write_idx_ + static_cast<int>(file_stat_.st_size);
+    } else {
+        bytes_to_send_ = write_idx_;
+    }
+
+    bytes_have_sent_ = 0;
+    return true;
+}
+
+HttpConnection::HttpWriteResult HttpConnection::write() {
+    if (bytes_to_send_ <= 0) {
+        return HttpWriteResult::DONE;
+    }
+
+    while (true) {
+        ssize_t len = ::writev(fd_, iov_, iov_cnt_);
+        if (len < 0) {
+            if (errno == EAGAIN) {
+                return HttpWriteResult::AGAIN;
+            }
+            if (errno == EINTR) {
+                continue;
+            }
+            unmapFile();
             return HttpWriteResult::ERROR;
         }
-    }
 
-    reset_response_state();
-    return HttpWriteResult::DONE;
+        bytes_have_sent_ += static_cast<int>(len);
+        bytes_to_send_ -= static_cast<int>(len);
+
+        int sent = static_cast<int>(len);
+
+        // 只保留你现在已有的“部分写偏移更新”思路
+        if (iov_cnt_ >= 1) {
+            if (sent >= static_cast<int>(iov_[0].iov_len)) {
+                sent -= static_cast<int>(iov_[0].iov_len);
+                iov_[0].iov_len = 0;
+
+                if (iov_cnt_ == 2) {
+                    iov_[1].iov_base = static_cast<char*>(iov_[1].iov_base) + sent;
+                    iov_[1].iov_len -= sent;
+                }
+            } else {
+                iov_[0].iov_base = static_cast<char*>(iov_[0].iov_base) + sent;
+                iov_[0].iov_len -= sent;
+            }
+        }
+
+        if (bytes_to_send_ <= 0) {
+            unmapFile();
+            return HttpWriteResult::DONE;
+        }
+    }
 }
 
-bool HttpConnection::is_keep_alive() const { return keep_alive_; }
-
-bool HttpConnection::process() {
-    HttpParseResult ret = process_read();
-    LOG_DEBUG("process_read ret = %d", static_cast<int>(ret));
-    if (ret == HttpParseResult::INCOMPLETE) {
+bool HttpConnection::mapFile(const std::string& path) {
+    int filefd = ::open(path.c_str(), O_RDONLY);
+    if (filefd < 0) {
         return false;
     }
 
-    if (ret != HttpParseResult::OK) {
-        LOG_ERROR("Parse error! read_buf = {%s}", read_buf_);
-        build_error_response(400, "Bad Request");
-        return true;
+    if (::stat(path.c_str(), &file_stat_) < 0) {
+        ::close(filefd);
+        return false;
     }
 
-    return process_request();
-}
-
-void HttpConnection::prepare_for_next_request() {
-    compact_read_buffer();
-    reset_request_state();
-}
-
-bool HttpConnection::process_request() {
-    read_idx_ = 0;
-
-    std::string file_path = "resources" + url_;
-
-    LOG_DEBUG("Client[fd=%d] request file [%s].", fd_, file_path.c_str());
-    struct stat file_stat;
-    if (stat(file_path.c_str(), &file_stat) == -1) {
-        LOG_DEBUG("file error! response code = %d.", 404);
-        build_error_response(404, "Not Found");
-        return true;
-    }
-
-    if (!S_ISREG(file_stat.st_mode) || !(file_stat.st_mode & S_IROTH)) {
-        LOG_DEBUG("file error! response code = %d.", 403);
-        build_error_response(403, "Forbidden");
-        return true;
-    }
-
-    int file_fd = open(file_path.c_str(), O_RDONLY);
-    file_addr_ = mmap(nullptr, file_stat.st_size, PROT_READ, MAP_PRIVATE, file_fd, 0);
-
-    ::close(file_fd);
+    file_addr_ = static_cast<char*>(
+        ::mmap(nullptr, file_stat_.st_size, PROT_READ, MAP_PRIVATE, filefd, 0));
+    ::close(filefd);
 
     if (file_addr_ == MAP_FAILED) {
-        LOG_DEBUG("file error! response code = %d.", 500);
-        build_error_response(500, "Internal Server Error");
-        return true;
-    }
-    file_size_ = file_stat.st_size;
-    LOG_DEBUG("Successful to mapping file! file_size = %d.", file_size_);
-    build_ok_response(200, file_stat.st_size);
-    return true;
-}
-
-void HttpConnection::close() { ::close(fd_); }
-
-HttpParseResult HttpConnection::parse_request_line(char* text) {
-    LOG_DEBUG("parse_request_line input = {%s}", text);
-    // 方法
-    text += strspn(text, " \t");
-    char* url = strpbrk(text, " \t");
-    if (!url) return HttpParseResult::INVALID_REQUEST;
-    *url++ = '\0';
-    char* method = text;
-    if (strcasecmp(method, "GET") == 0) {
-        method_ = "GET";
-    } else if (strcasecmp(method, "POST") == 0) {
-        method_ = "POST";
-        LOG_ERROR("Not support Method POST.");
-        return HttpParseResult::INVALID_METHOD;
-    } else {
-        return HttpParseResult::INVALID_METHOD;
-    }
-
-    // 提取url
-    char* version = strpbrk(url, " \t");
-    if (!version) return HttpParseResult::INVALID_REQUEST;
-    *version++ = '\0';
-
-    // 去掉url尾部空格
-    char* end = url + strlen(url) - 1;
-    while (end > url && (*end == ' ' || *end == '\t')) {
-        *end-- = '\0';
-    }
-
-    if (strncasecmp(url, "http://", 7) == 0) {
-        url += 7;
-        url = strchr(url, '/');
-    }
-
-    if (!url || url[0] == '\0') {
-        url_ = "/index.html";
-    } else {
-        url_ = url;
-        if (url_ == "/") url_ = "/index.html";
-    }
-    char* end_of_line = strpbrk(version, "\r\n");
-    if (end_of_line) *end_of_line = '\0';
-
-    if (strcasecmp(version, "HTTP/1.1") == 0) {
-        version_ = "HTTP/1.1";
-        keep_alive_ = true;  // HTTP/1.1 默认长连接
-    } else if (strcasecmp(version, "HTTP/1.0") == 0) {
-        version_ = "HTTP/1.0";
-        keep_alive_ = false;  // HTTP/1.0 默认短连接
-    } else {
-        return HttpParseResult::INVALID_VERSION;
-    }
-    LOG_DEBUG("method = {%s}", method);
-    LOG_DEBUG("url = {%s}", url);
-    LOG_DEBUG("version = {%s}", version);
-    return HttpParseResult::OK;
-}
-
-bool HttpConnection::add_response(const char* format, ...) {
-    if (write_idx_ >= WRITE_BUFFER_SIZE) return false;
-
-    va_list arg_list;
-    va_start(arg_list, format);
-
-    int len =
-        vsnprintf(write_buf_ + write_idx_, WRITE_BUFFER_SIZE - write_idx_ - 1, format, arg_list);
-
-    if (len >= (WRITE_BUFFER_SIZE - write_idx_ - 1)) {
-        va_end(arg_list);
+        file_addr_ = nullptr;
         return false;
     }
-
-    write_idx_ += len;
-    va_end(arg_list);
     return true;
 }
 
-int HttpConnection::getfd() { return fd_; }
+void HttpConnection::unmapFile() {
+    if (file_addr_) {
+        ::munmap(file_addr_, file_stat_.st_size);
+        file_addr_ = nullptr;
+    }
+}
 
 void HttpConnection::reset() {
-    if (file_addr_) {
-        munmap(file_addr_, file_size_);
-        file_addr_ = nullptr;
-    }
+    unmapFile();
+
     read_idx_ = 0;
     write_idx_ = 0;
-    head_sent_ = 0;
-    file_sent_ = 0;
-    method_.clear();
-    url_.clear();
-    version_.clear();
-}
-
-std::string HttpConnection::get_method() { return method_; }
-
-std::string HttpConnection::get_url() { return url_; }
-
-std::string HttpConnection::get_version() { return version_; }
-
-const char* HttpConnection::get_content_type(const std::string& url) {
-    auto ends_with = [](const std::string& str, const std::string& suffix) {
-        if (str.size() < suffix.size()) return false;
-        return str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
-    };
-    if (ends_with(url, ".html")) return "text/html";
-    if (ends_with(url, ".css")) return "text/css";
-    if (ends_with(url, ".js")) return "application/javascript";
-    if (ends_with(url, ".png")) return "image/png";
-    if (ends_with(url, ".jpg")) return "image/jpeg";
-    if (ends_with(url, ".ico")) return "image/x-icon";
-
-    return "text/plain";
-}
-
-void HttpConnection::build_ok_response(int code, size_t file_size) {
-    write_idx_ = 0;
-    head_sent_ = 0;
-    // 开始构建响应
-    add_response("%s %d %s\r\n", "HTTP/1.1", code, "OK");
-    add_response("Content-Type: %s\r\n", get_content_type(url_));
-    add_response("Connection: %s\r\n", keep_alive_ ? "keep-alive" : "close");
-    add_response("Content-Length: %zu\r\n", file_size);
-    add_response("\r\n");  // 关键的空行
-}
-
-void HttpConnection::build_error_response(int code, const char* reason) {
-    write_idx_ = 0;
-    head_sent_ = 0;
-    add_response("%s %d %s\r\n", "HTTP/1.1", code, reason);
-    add_response("Content-Type: %s\r\n", get_content_type(url_));
-    add_response("Connection: %s\r\n", "close");
-    add_response("Content-Length: %zu\r\n", 0);
-    add_response("\r\n");
-}
-
-LineStatus HttpConnection::parse_line() {
-    for (; checked_idx_ < read_idx_; ++checked_idx_) {
-        char ch = read_buf_[checked_idx_];
-
-        if (ch == '\r') {
-            if (checked_idx_ + 1 == read_idx_) {
-                return LineStatus::LINE_OPEN;
-            }
-
-            if (read_buf_[checked_idx_ + 1] == '\n') {
-                read_buf_[checked_idx_] = 0;
-                read_buf_[checked_idx_ + 1] = 0;
-                checked_idx_ += 2;
-                return LineStatus::LINE_OK;
-            }
-        }
-
-        if (ch == '\n') {
-            if (checked_idx_ > 0 && read_buf_[checked_idx_ - 1] == '\r') {
-                read_buf_[checked_idx_ - 1] = 0;
-                read_buf_[checked_idx_] = 0;
-                ++checked_idx_;
-                return LineStatus::LINE_OK;
-            }
-            return LineStatus::LINE_BAD;
-        }
-    }
-    return LineStatus::LINE_OPEN;
-}
-
-HttpParseResult HttpConnection::parse_headers(char* text) {
-    // 空行：说明请求头结束
-    if (text[0] == '\0') {
-        if (content_length_ != 0) {
-            parse_state_ = ParseState::BODY;
-            return HttpParseResult::INCOMPLETE;
-        }
-        parse_state_ = ParseState::FINISH;
-        return HttpParseResult::OK;
-    }
-
-    if (strncasecmp(text, "Connection:", 11) == 0) {
-        text += 11;
-        text += strspn(text, " \t");
-        if (strcasecmp(text, "keep-alive") == 0) {
-            keep_alive_ = true;
-        } else if (strcasecmp(text, "close") == 0) {
-            keep_alive_ = false;
-        }
-    } else if (strncasecmp(text, "Content-Length:", 15) == 0) {
-        text += 15;
-        text += strspn(text, " \t");
-        content_length_ = static_cast<size_t>(atoi(text));
-    } else if (strncasecmp(text, "Host:", 5) == 0) {
-        text += 5;
-        text += strspn(text, " \t");
-        host_ = text;
-    } else {
-        // 其他 header 先忽略
-    }
-
-    return HttpParseResult::INCOMPLETE;
-}
-
-HttpParseResult HttpConnection::process_read() {
-    LineStatus line_status = LineStatus::LINE_OK;
-    char* text = nullptr;
-    while (true) {
-        line_status = parse_line();
-        if (line_status == LineStatus::LINE_OPEN) {
-            break;  // 当前还没有完整一行，等下次 read
-        }
-
-        if (line_status == LineStatus::LINE_BAD) {
-            return HttpParseResult::INVALID_REQUEST;
-        }
-
-        text = read_buf_ + start_line_;
-        start_line_ = checked_idx_;
-
-        switch (parse_state_) {
-            case ParseState::REQUEST_LINE: {
-                HttpParseResult ret = parse_request_line(text);
-                if (ret != HttpParseResult::OK) {
-                    return ret;
-                }
-                parse_state_ = ParseState::HEADERS;
-                break;
-            }
-
-            case ParseState::HEADERS: {
-                HttpParseResult ret = parse_headers(text);
-                if (ret == HttpParseResult::OK) {
-                    return HttpParseResult::OK;  // 整个请求头解析完成
-                }
-                if (ret != HttpParseResult::INCOMPLETE) {
-                    return ret;
-                }
-                break;
-            }
-
-            case ParseState::BODY: {
-                // 你当前先不处理 POST body
-                // 这里先留接口，后面再加
-                return HttpParseResult::OK;
-            }
-
-            default:
-                return HttpParseResult::INVALID_REQUEST;
-        }
-    }
-
-    return HttpParseResult::INCOMPLETE;
-}
-
-void HttpConnection::reset_request_state() {
-    method_.clear();
-    url_.clear();
-    version_.clear();
-    host_.clear();
-
-    content_length_ = 0;
-
-    parse_state_ = ParseState::REQUEST_LINE;
+    iov_cnt_ = 0;
+    bytes_to_send_ = 0;
+    bytes_have_sent_ = 0;
     keep_alive_ = false;
 
-    start_line_ = 0;
-    checked_idx_ = 0;
-}
+    std::memset(read_buf_, 0, sizeof(read_buf_));
+    std::memset(write_buf_, 0, sizeof(write_buf_));
+    std::memset(&file_stat_, 0, sizeof(file_stat_));
 
-void HttpConnection::reset_response_state() {
-    if (file_addr_) {
-        munmap(file_addr_, file_size_);
-        file_addr_ = nullptr;
-    }
-
-    file_size_ = 0;
-    write_idx_ = 0;
-
-    head_sent_ = 0;
-    file_sent_ = 0;
-
-    write_buf_[0] = '\0';
-}
-
-void HttpConnection::compact_read_buffer() {
-    if (start_line_ == 0) {
-        return;
-    }
-
-    size_t remain = read_idx_ - start_line_;
-    if (remain > 0) {
-        memmove(read_buf_, read_buf_ + start_line_, remain);
-    }
-
-    read_idx_ = remain;
-    checked_idx_ = 0;
-    start_line_ = 0;
-
-    if (read_idx_ < READ_BUFFER_SIZE) {
-        read_buf_[read_idx_] = '\0';
-    }
+    request_.init();
+    response_.init();
 }
