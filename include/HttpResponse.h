@@ -22,8 +22,10 @@ public:
     const std::string& filePath() const { return file_path_; }
     const std::string& buffer() const { return buffer_; }
 
-private:
+    void setExtraHeaders(const std::string& headers);
     void makeErrorResponse(int status, const std::string& title, const std::string& text);
+    void makeTextResponse(int status, const std::string& content_type, const std::string& text, bool keep_alive);
+private:
     void addStatusLine(int status);
     void addHeaders(size_t content_len);
     void addContentType();
@@ -39,4 +41,5 @@ private:
     bool keep_alive_;
     std::string file_path_;
     std::string buffer_;
+    std::string extra_headers_;
 };

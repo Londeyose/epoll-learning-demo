@@ -7,6 +7,7 @@ const finalScoreEl = document.getElementById('final-score');
 const titleEl = document.getElementById('title');
 const leaderboardArea = document.getElementById('leaderboard');
 const scoresList = document.getElementById('scores-list');
+const userNameEl = document.getElementById('user-name');
 
 let hp = 100;
 let score = 0;
@@ -21,6 +22,23 @@ const leaderboardData = [
     { name: "Jack", score: 890 },
     { name: "Apex", score: 500 }
 ];
+
+async function loadCurrentUser() {
+    try {
+        const resp = await fetch('/whoami');
+        if (!resp.ok) {
+            return;
+        }
+        const data = await resp.json();
+        if (data && data.ok && data.username && userNameEl) {
+            userNameEl.innerText = data.username;
+        }
+    } catch (err) {
+        // 读取用户信息失败时保持默认 Guest。
+    }
+}
+
+loadCurrentUser();
 
 startBtn.addEventListener('click', () => {
     hp = 100;

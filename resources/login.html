@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录</title>
+    <link rel="stylesheet" href="auth.css">
+</head>
+
+<body>
+    <div class="phone-wrapper">
+        <div class="phone-notch"></div>
+        <div class="phone-screen">
+            <div class="header-bar">
+                <span class="header-tag">SYSTEM</span>
+                <span class="header-title">LOGIN MODE</span>
+            </div>
+            <div class="screen-content">
+                <div class="auth-card">
+                    <h1 class="auth-title">用户登录</h1>
+                    <p class="auth-subtitle">输入账号信息后进入游戏</p>
+                    <form id="login-form" class="auth-form" method="post" action="/login">
+                        <input class="auth-input" name="username" type="text" placeholder="用户名" autocomplete="username" required>
+                        <input class="auth-input" name="password" type="password" placeholder="密码" autocomplete="current-password" required>
+                        <button class="auth-button" type="submit">登录</button>
+                        <button id="to-register-btn" class="auth-button secondary" type="button">注册</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="auth.js"></script>
+</body>
+
+</html>

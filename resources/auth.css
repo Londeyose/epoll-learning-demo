@@ -1,0 +1,183 @@
+:root {
+    --bg-color: #0c0c0c;
+    --header-bg: #2e2e2e;
+    --text-color: #58a6ff;
+    --danger-color: #f85149;
+    --primary: #238636;
+    --primary-glow: #3fb950;
+    --input-bg: rgba(255, 255, 255, 0.06);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Consolas', 'Courier New', monospace;
+    background: radial-gradient(circle at 30% 20%, #f5f7fa 0%, #e8edf3 45%, #dde4ec 100%);
+    overflow: hidden;
+}
+
+.phone-wrapper {
+    width: 360px;
+    height: 640px;
+    background: linear-gradient(160deg, #0f1217 0%, #1a2029 55%, #252d39 100%);
+    border: 12px solid #3a4454;
+    border-radius: 50px;
+    position: relative;
+    box-shadow:
+        0 22px 55px rgba(0, 0, 0, 0.35),
+        0 45px 100px rgba(0, 0, 0, 0.22),
+        inset 0 2px 6px rgba(255, 255, 255, 0.08),
+        inset 0 -8px 14px rgba(0, 0, 0, 0.22);
+}
+
+.phone-notch {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 150px;
+    height: 25px;
+    background: linear-gradient(180deg, #2a313d 0%, #1d232d 100%);
+    border: 1px solid rgba(132, 146, 166, 0.3);
+    border-bottom-left-radius: 15px;
+    border-bottom-right-radius: 15px;
+    z-index: 2;
+}
+
+.phone-screen {
+    width: 100%;
+    height: 100%;
+    border-radius: 38px;
+    overflow: hidden;
+    background: var(--bg-color);
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+.header-bar {
+    height: 62px;
+    margin-top: 20px;
+    padding: 0 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--header-bg);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.6);
+}
+
+.header-tag {
+    color: var(--danger-color);
+    font-size: 13px;
+    letter-spacing: 1px;
+    font-weight: 700;
+}
+
+.header-title {
+    color: var(--text-color);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.screen-content {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background-image: radial-gradient(#1f242c 1px, transparent 0);
+    background-size: 25px 25px;
+}
+
+.auth-card {
+    width: 100%;
+    max-width: 300px;
+    padding: 22px;
+    border: 1px solid rgba(88, 166, 255, 0.35);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.04);
+    box-shadow: 0 0 24px rgba(63, 185, 80, 0.15);
+}
+
+.auth-title {
+    margin: 0;
+    color: var(--danger-color);
+    text-align: center;
+    font-size: 22px;
+    text-shadow: 0 0 10px rgba(248, 81, 73, 0.35);
+}
+
+.auth-subtitle {
+    margin: 10px 0 20px;
+    text-align: center;
+    color: #d1d5db;
+    font-size: 13px;
+}
+
+.auth-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.auth-input {
+    width: 100%;
+    border: 1px solid rgba(88, 166, 255, 0.35);
+    border-radius: 10px;
+    padding: 11px 12px;
+    font-family: inherit;
+    font-size: 14px;
+    color: #ffffff;
+    background: var(--input-bg);
+    outline: none;
+}
+
+.auth-input:focus {
+    border-color: var(--primary-glow);
+    box-shadow: 0 0 0 2px rgba(63, 185, 80, 0.25);
+}
+
+.auth-button {
+    border: none;
+    border-radius: 22px;
+    padding: 11px 16px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    color: #fff;
+    background: var(--primary);
+    cursor: pointer;
+    box-shadow: 0 0 15px rgba(35, 134, 54, 0.4);
+    transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.auth-button:hover {
+    transform: translateY(-1px);
+    background: var(--primary-glow);
+    box-shadow: 0 0 24px rgba(63, 185, 80, 0.8);
+}
+
+.auth-button.secondary {
+    background: transparent;
+    border: 1px solid var(--text-color);
+    color: var(--text-color);
+    box-shadow: none;
+}
+
+.auth-button.secondary:hover {
+    color: #fff;
+    border-color: var(--primary-glow);
+}
+
+@media (max-width: 420px) {
+    .phone-wrapper {
+        transform: scale(0.95);
+    }
+}

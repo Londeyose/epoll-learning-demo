@@ -53,8 +53,17 @@ void HeapTimer::doWork(int fd) {
         return;
     }
     size_t i = ref_[fd];
-    if (heap_[i].cb) heap_[i].cb();
-    del(i);
+    auto cb = heap_[i].cb;
+    if (cb) {
+        cb();
+    }
+
+    // 回调里可能已经通过 closeConn()->timer_.remove(fd) 删除了该节点，
+    // 这里需要再次确认，避免重复删除导致误删其它 fd 的定时器。
+    auto it = ref_.find(fd);
+    if (it != ref_.end()) {
+        del(it->second);
+    }
 }
 
 void HeapTimer::remove(int fd) {

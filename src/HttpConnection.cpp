@@ -1,13 +1,18 @@
 #include "HttpConnection.h"
-
+#include "LogMacro.h"
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <cerrno>
 #include <cstring>
+#include <sstream>
 
 const char* HttpConnection::src_dir_ = "./resources";
+std::unordered_map<std::string, std::string> HttpConnection::sessions_;
+std::mutex HttpConnection::sessions_mtx_;
+std::atomic<unsigned long long> HttpConnection::session_counter_(0);
 
 HttpConnection::HttpConnection()
     : fd_(-1),
@@ -38,6 +43,7 @@ void HttpConnection::init(int fd, const sockaddr_in& addr) {
     bytes_to_send_ = 0;
     bytes_have_sent_ = 0;
     keep_alive_ = false;
+    pending_headers_.clear();
 
     file_addr_ = nullptr;
     std::memset(read_buf_, 0, sizeof(read_buf_));
@@ -85,18 +91,21 @@ HttpConnection::HttpReadResult HttpConnection::read() {
 bool HttpConnection::process() {
     response_.init();
     unmapFile();
+    pending_headers_.clear();
 
     write_idx_ = 0;
     iov_cnt_ = 0;
     bytes_to_send_ = 0;
     bytes_have_sent_ = 0;
-
+    LOG_DEBUG("Client(fd = %d)'s data = {%s}", fd_, read_buf_);
     auto ret = request_.parse(read_buf_, read_idx_);
     if (ret == HttpRequest::ParseResult::INCOMPLELE) {
+        LOG_INFO("Client(fd = %d) send data are incomplete.", fd_);
         return false;
     }
 
     if (ret == HttpRequest::ParseResult::ERROR) {
+        LOG_ERROR("Cant parse the data from client(fd=%d)", fd_);
         keep_alive_ = false;
         return prepareErrorResponse();
     }
@@ -111,7 +120,150 @@ bool HttpConnection::process() {
 }
 
 bool HttpConnection::makeResponse() {
+    response_.setExtraHeaders(pending_headers_);
+    if (request_.method() == "GET" && request_.path() == "/whoami") {
+        return handleWhoAmI();
+    }
+
+    if (request_.method() == "POST") {
+        if (request_.path() == "/login") {
+            return handleLogin();         
+        }
+        if (request_.path() == "/register") {
+            return handleRegister();
+        }
+    }
     return response_.build(request_, src_dir_, keep_alive_);
+}
+
+bool HttpConnection::handleLogin() {
+    std::string username = request_.getPost("username");
+    std::string password = request_.getPost("password");
+    LOG_DEBUG("handleLogin: name: %s, password: %s.", username.c_str(), password.c_str());
+
+    std::string dbpassword;
+    bool login_ok = false;
+    {
+        MYSQL* sql = nullptr;
+        SqlConnRAII raii(&sql, SqlConnPool::instance());
+        std::string sql_cmd = "select password from user where name = '";
+        sql_cmd += username;
+        sql_cmd += "'";
+
+        if (mysql_query(sql, sql_cmd.c_str()) != 0) {
+            LOG_ERROR("mysql_query failed: %s", mysql_error(sql));
+            response_.makeErrorResponse(500, "Server Error", "<html><body><h1>Fail to query database.</h1></body></html>");
+            return true;
+        }
+
+        MYSQL_RES* res = mysql_store_result(sql);
+        if (!res) {
+            LOG_ERROR("mysql_store_result failed: %s", mysql_error(sql));
+            response_.makeErrorResponse(500, "Server Error", "<html><body><h1>Fail to query database.</h1></body></html>");
+            return true;
+        }
+
+        MYSQL_ROW row = mysql_fetch_row(res);
+        if (row && row[0]) {
+            dbpassword = row[0];
+            login_ok = (dbpassword == password);
+        }
+        LOG_DEBUG("dbpassword = %s.", dbpassword.c_str());
+        mysql_free_result(res);
+    }
+    if (login_ok) {
+        LOG_INFO("LOGIN SUCCESS.");
+        std::string session_id = generateSessionId(username);
+        {
+            std::lock_guard<std::mutex> lock(sessions_mtx_);
+            sessions_[session_id] = username;
+        }
+        pending_headers_ = "Set-Cookie: session_id=" + session_id + "; Path=/; HttpOnly\r\n";
+        response_.setExtraHeaders(pending_headers_);
+        request_.setPath("/index.html");
+    } else {
+        LOG_INFO("LOGIN ERROR.");
+        request_.setPath("/login.html");
+    }
+    return response_.build(request_, src_dir_, keep_alive_);
+
+}
+
+bool HttpConnection::handleRegister() {
+    std::string username = request_.getPost("username");
+    std::string password = request_.getPost("password");
+    LOG_DEBUG("handleRegister: name: %s, password: %s.", username.c_str(), password.c_str());
+
+    bool register_ok = false;
+    {
+        MYSQL* sql = nullptr;
+        SqlConnRAII raii(&sql, SqlConnPool::instance());
+
+        std::string check_sql = "select name from user where name = '";
+        check_sql += username;
+        check_sql += "'";
+        if (mysql_query(sql, check_sql.c_str()) != 0) {
+            LOG_ERROR("mysql_query failed when checking user: %s", mysql_error(sql));
+            response_.makeErrorResponse(500, "Server Error", "<html><body><h1>Fail to query database.</h1></body></html>");
+            return true;
+        }
+
+        MYSQL_RES* res = mysql_store_result(sql);
+        if (!res) {
+            LOG_ERROR("mysql_store_result failed when checking user: %s", mysql_error(sql));
+            response_.makeErrorResponse(500, "Server Error", "<html><body><h1>Fail to query database.</h1></body></html>");
+            return true;
+        }
+
+        bool user_exists = (mysql_fetch_row(res) != nullptr);
+        mysql_free_result(res);
+        if (!user_exists) {
+            std::string insert_sql = "insert into user(name, password, score) values('";
+            insert_sql += username;
+            insert_sql += "', '";
+            insert_sql += password;
+            insert_sql += "', 0)";
+
+            if (mysql_query(sql, insert_sql.c_str()) != 0) {
+                LOG_ERROR("mysql_query failed when insert user: %s", mysql_error(sql));
+                response_.makeErrorResponse(500, "Server Error", "<html><body><h1>Fail to insert user.</h1></body></html>");
+                return true;
+            }
+            register_ok = true;
+        }
+    }
+
+    if (register_ok) {
+        LOG_INFO("REGISTER SUCCESS.");
+        request_.setPath("/login.html");
+    } else {
+        LOG_INFO("REGISTER ERROR.");
+        request_.setPath("/register.html");
+    }
+    return response_.build(request_, src_dir_, keep_alive_);
+}
+
+bool HttpConnection::handleWhoAmI() {
+    std::string cookie = request_.getHeader("Cookie");
+    std::string session_id = getCookieValue(cookie, "session_id");
+    std::string username;
+
+    if (!session_id.empty()) {
+        std::lock_guard<std::mutex> lock(sessions_mtx_);
+        auto it = sessions_.find(session_id);
+        if (it != sessions_.end()) {
+            username = it->second;
+        }
+    }
+
+    if (username.empty()) {
+        response_.makeTextResponse(200, "application/json",
+            "{\"ok\":false,\"username\":\"\"}", keep_alive_);
+    } else {
+        response_.makeTextResponse(200, "application/json",
+            "{\"ok\":true,\"username\":\"" + username + "\"}", keep_alive_);
+    }
+    return true;
 }
 
 bool HttpConnection::prepareErrorResponse() {
@@ -153,7 +305,7 @@ bool HttpConnection::prepareWrite() {
     iov_[0].iov_len = write_idx_;
     iov_cnt_ = 1;
 
-    if (response_.statusCode() == 200) {
+    if (response_.statusCode() == 200 && !response_.filePath().empty()) {
         if (!mapFile(response_.filePath())) {
             return false;
         }
@@ -254,6 +406,7 @@ void HttpConnection::reset() {
     bytes_to_send_ = 0;
     bytes_have_sent_ = 0;
     keep_alive_ = false;
+    pending_headers_.clear();
 
     std::memset(read_buf_, 0, sizeof(read_buf_));
     std::memset(write_buf_, 0, sizeof(write_buf_));
@@ -261,4 +414,36 @@ void HttpConnection::reset() {
 
     request_.init();
     response_.init();
+}
+
+std::string HttpConnection::generateSessionId(const std::string& username) {
+    const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto seq = ++session_counter_;
+    const auto user_hash = std::hash<std::string>{}(username);
+
+    std::ostringstream oss;
+    oss << std::hex << now << seq << user_hash;
+    return oss.str();
+}
+
+std::string HttpConnection::getCookieValue(const std::string& cookie_header, const std::string& key) {
+    std::string target = key + "=";
+    size_t pos = cookie_header.find(target);
+    if (pos == std::string::npos) {
+        return "";
+    }
+
+    pos += target.size();
+    size_t end = cookie_header.find(';', pos);
+    if (end == std::string::npos) {
+        end = cookie_header.size();
+    }
+
+    while (pos < end && cookie_header[pos] == ' ') {
+        ++pos;
+    }
+    while (end > pos && cookie_header[end - 1] == ' ') {
+        --end;
+    }
+    return cookie_header.substr(pos, end - pos);
 }
