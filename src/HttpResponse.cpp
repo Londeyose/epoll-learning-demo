@@ -12,12 +12,13 @@ void HttpResponse::init() {
     keep_alive_ = false;
     file_path_.clear();
     buffer_.clear();
+    extra_headers_.clear();
 }
 
 bool HttpResponse::build(const HttpRequest& request, const std::string& src_dir, bool keep_alive) {
-    init();
-
+    status_code_ = 200;
     keep_alive_ = keep_alive;
+    buffer_.clear();
     file_path_ = src_dir + request.path();
 
     struct stat st {};
@@ -38,12 +39,36 @@ bool HttpResponse::build(const HttpRequest& request, const std::string& src_dir,
 }
 
 void HttpResponse::makeErrorResponse(int status, const std::string& title, const std::string& text) {
+    (void)title;
     status_code_ = status;
     file_path_.clear();
 
     addStatusLine(status);
     addContentType();
     addConnection();
+    if (!extra_headers_.empty()) {
+        buffer_ += extra_headers_;
+    }
+    addContentLength(text.size());
+    addBlankLine();
+    addContent(text);
+}
+
+void HttpResponse::setExtraHeaders(const std::string& headers) {
+    extra_headers_ = headers;
+}
+
+void HttpResponse::makeTextResponse(int status, const std::string& content_type, const std::string& text, bool keep_alive) {
+    init();
+    status_code_ = status;
+    keep_alive_ = keep_alive;
+
+    addStatusLine(status);
+    buffer_ += "Content-Type: " + content_type + "\r\n";
+    addConnection();
+    if (!extra_headers_.empty()) {
+        buffer_ += extra_headers_;
+    }
     addContentLength(text.size());
     addBlankLine();
     addContent(text);
@@ -72,6 +97,9 @@ void HttpResponse::addStatusLine(int status) {
 void HttpResponse::addHeaders(size_t content_len) {
     addContentType();
     addConnection();
+    if (!extra_headers_.empty()) {
+        buffer_ += extra_headers_;
+    }
     addContentLength(content_len);
     addBlankLine();
 }

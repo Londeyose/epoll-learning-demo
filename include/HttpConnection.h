@@ -4,10 +4,14 @@
 #include <sys/stat.h>
 #include <sys/uio.h>
 
+#include <atomic>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 
 #include "HttpRequest.h"
 #include "HttpResponse.h"
+#include "SqlConnRAII.h"
 
 class HttpConnection {
 public:
@@ -53,6 +57,11 @@ private:
     bool mapFile(const std::string& path);
     void unmapFile();
 
+    bool handleRegister();
+    bool handleLogin();
+    bool handleWhoAmI();
+    static std::string generateSessionId(const std::string& username);
+    static std::string getCookieValue(const std::string& cookie_header, const std::string& key);
 private:
     int fd_;
     sockaddr_in addr_;
@@ -73,7 +82,12 @@ private:
     struct stat file_stat_;
 
     bool keep_alive_;
+    std::string pending_headers_;
 
     HttpRequest request_;
     HttpResponse response_;
+
+    static std::unordered_map<std::string, std::string> sessions_;
+    static std::mutex sessions_mtx_;
+    static std::atomic<unsigned long long> session_counter_;
 };

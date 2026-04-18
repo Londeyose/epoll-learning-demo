@@ -16,6 +16,7 @@
 #include "LogMacro.h"
 #include "Logger.h"
 #include "WebServer.h"
+#include "SqlConnRAII.h"
 
 int main() {
     LogConfig config;
@@ -31,6 +32,15 @@ int main() {
     config.flush_internal_ms = 1000;
 
     LoggerGuard logger_guard(config);
+
+    SqlConnPool::instance()->init(
+        "127.0.0.1",
+        3306,
+        "webuser",
+        "123456",
+        "webusers",
+        10
+    );
 
     LOG_INFO("Logger initialize successfully");
     LOG_INFO("WebServer starting...");
