@@ -65,6 +65,7 @@ private:
 private:
     int fd_;
     sockaddr_in addr_;
+    std::mutex mtx_;
 
     char read_buf_[READ_BUFFER_SIZE];
     int read_idx_;

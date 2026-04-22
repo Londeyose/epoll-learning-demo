@@ -14,7 +14,7 @@ public:
 
     bool push(T&& value) {
         std::unique_lock<std::mutex> lock(mutex_);
-        while (!closed_ && queue_.size() > capacity_) {
+        while (!closed_ && queue_.size() >= capacity_) {
             not_full_cv_.wait(lock);
         }
         
@@ -29,7 +29,7 @@ public:
 
     bool push(const T& value) {
         std::unique_lock<std::mutex> lock(mutex_);
-        while (!closed_ && queue_.size() > capacity_) {
+        while (!closed_ && queue_.size() >= capacity_) {
             not_full_cv_.wait(lock);
         }
 
@@ -37,7 +37,7 @@ public:
             return false;
         }
 
-        queue_.push(std::move(value));
+        queue_.push(value);
         not_empty_cv_.notify_one();
         return true;
     }
@@ -65,7 +65,7 @@ public:
         not_full_cv_.notify_all();
     }
 
-    void empty() const {
+    bool empty() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return queue_.empty();
     }
