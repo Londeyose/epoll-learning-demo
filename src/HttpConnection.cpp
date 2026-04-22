@@ -34,6 +34,7 @@ HttpConnection::~HttpConnection() {
 }
 
 void HttpConnection::init(int fd, const sockaddr_in& addr) {
+    std::lock_guard<std::mutex> lock(mtx_);
     fd_ = fd;
     addr_ = addr;
 
@@ -55,6 +56,7 @@ void HttpConnection::init(int fd, const sockaddr_in& addr) {
 }
 
 void HttpConnection::closeConn() {
+    std::lock_guard<std::mutex> lock(mtx_);
     unmapFile();
     if (fd_ != -1) {
         ::close(fd_);
@@ -63,6 +65,7 @@ void HttpConnection::closeConn() {
 }
 
 HttpConnection::HttpReadResult HttpConnection::read() {
+    std::lock_guard<std::mutex> lock(mtx_);
     while (true) {
         int remain = READ_BUFFER_SIZE - read_idx_ - 1;
         if (remain <= 0) {
@@ -89,6 +92,7 @@ HttpConnection::HttpReadResult HttpConnection::read() {
 }
 
 bool HttpConnection::process() {
+    std::lock_guard<std::mutex> lock(mtx_);
     response_.init();
     unmapFile();
     pending_headers_.clear();
@@ -323,6 +327,7 @@ bool HttpConnection::prepareWrite() {
 }
 
 HttpConnection::HttpWriteResult HttpConnection::write() {
+    std::lock_guard<std::mutex> lock(mtx_);
     if (bytes_to_send_ <= 0) {
         return HttpWriteResult::DONE;
     }
@@ -398,6 +403,7 @@ void HttpConnection::unmapFile() {
 }
 
 void HttpConnection::reset() {
+    std::lock_guard<std::mutex> lock(mtx_);
     unmapFile();
 
     read_idx_ = 0;
